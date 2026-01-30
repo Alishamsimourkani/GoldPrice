@@ -1,0 +1,5 @@
+{
+  "name": "AuraGold: Precision Calculator",
+  "description": "A luxury-themed gold price calculator that integrates real-time market data from GoldAPI. Calculate custom 18K purity values based on exchange rates and international spot prices.",
+  "requestFramePermissions": []
+}
