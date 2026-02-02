@@ -1,9 +1,10 @@
+
 import { parseNumericValue } from './utils';
 
 const WALLGOLD_TOKEN = "5093975|bCdpaLmf9i7CcVAusx53DpffU9LeE8tLq9XlVzHRe96015bd";
 
 /**
- * Fetches the Market Price from WallGold API.
+ * Fetches Market Price from WallGold with 30s timeout.
  */
 export const fetchMarketPrice = async (): Promise<number> => {
   const url = "https://api.wallgold.ir/api/v1/price?symbol=GLD_18C_750TMN&side=buy";
@@ -16,7 +17,7 @@ export const fetchMarketPrice = async (): Promise<number> => {
     const response = await fetch(url, {
       method: 'GET',
       headers: headers,
-      signal: AbortSignal.timeout(15000)
+      signal: AbortSignal.timeout(30000)
     });
     
     if (response.ok) {

@@ -1,3 +1,4 @@
+
 import { parseNumericValue } from './utils';
 
 export interface ExchangeRateDetail {
@@ -12,7 +13,7 @@ export type ExchangeRateResult = {
 };
 
 /**
- * Fetches exchange rates from Tetherland and Nobitex concurrently.
+ * Fetches exchange rates with 30s timeout.
  */
 export const fetchExchangeRate = async (): Promise<ExchangeRateResult> => {
   const tetherlandTarget = "https://api.tetherland.com/currencies";
@@ -26,7 +27,7 @@ export const fetchExchangeRate = async (): Promise<ExchangeRateResult> => {
 
   const fetchTetherland = async () => {
     try {
-      const response = await fetch(tetherlandTarget, { signal: AbortSignal.timeout(15000) });
+      const response = await fetch(tetherlandTarget, { signal: AbortSignal.timeout(30000) });
       if (response.ok) {
         const data = await response.json();
         const currencies = data?.data?.currencies || data?.currencies;
@@ -42,7 +43,7 @@ export const fetchExchangeRate = async (): Promise<ExchangeRateResult> => {
 
   const fetchNobitex = async () => {
     try {
-      const response = await fetch(nobitexTarget, { signal: AbortSignal.timeout(15000) });
+      const response = await fetch(nobitexTarget, { signal: AbortSignal.timeout(30000) });
       if (response.ok) {
         const data = await response.json();
         if (data.status === "ok" && data.lastTradePrice) {

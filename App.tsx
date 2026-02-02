@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   Calculator, TrendingUp, TrendingDown, DollarSign, RefreshCw, Info, Scale, 
@@ -5,7 +6,7 @@ import {
   MoveUp, MoveDown, Zap, ShoppingBag, BarChart3, Bell, BellOff, Volume2, VolumeX
 } from 'lucide-react';
 import { fetchLatestGoldPrice, fetchExchangeRate, fetchMarketPrice } from './services';
-import { GoldApiResponse } from './types';
+import { GoldSource } from './services/goldSpotService';
 
 const STORAGE_KEYS = {
   EXCHANGE_RATE: 'auragold_exchange_rate',
@@ -13,6 +14,7 @@ const STORAGE_KEYS = {
   GRAM_AMOUNT: 'auragold_gram_amount',
   EXCHANGE_SOURCE: 'auragold_exchange_source',
   GOLD_SOURCE: 'auragold_gold_source',
+  GOLD_PREF_SOURCE: 'auragold_gold_pref_source',
   REFRESH_INTERVAL: 'auragold_refresh_interval',
   USER_PREFERENCE_SOURCE: 'auragold_user_pref_source',
   MARKET_PRICE: 'auragold_market_price',
@@ -67,6 +69,11 @@ const App: React.FC = () => {
     return (saved as any) || 'Auto';
   });
 
+  const [goldPrefSource, setGoldPrefSource] = useState<GoldSource>(() => {
+    const saved = localStorage.getItem(STORAGE_KEYS.GOLD_PREF_SOURCE);
+    return (saved as GoldSource) || 'Auto';
+  });
+
   const [notificationsEnabled, setNotificationsEnabled] = useState<boolean>(() => {
     return localStorage.getItem(STORAGE_KEYS.NOTIFICATIONS_ENABLED) === 'true';
   });
@@ -82,6 +89,7 @@ const App: React.FC = () => {
   const [prevExchangeRate, setPrevExchangeRate] = useState<number | null>(null);
   const [prevGoldPrice, setPrevGoldPrice] = useState<number | null>(null);
   const [prevValuation, setPrevValuation] = useState<number | null>(null);
+  const [prevMarketPrice, setPrevMarketPrice] = useState<number | null>(null);
 
   const [isInitialLoad, setIsInitialLoad] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -96,7 +104,6 @@ const App: React.FC = () => {
 
   const calculateResult = useCallback((rate: number, spot: number): number => {
     if (!rate || !spot) return 0;
-    // Core Formula: ((Exchange Price * Spot Price) / 31.1035) * 0.75
     return ((rate * spot) / 31.1035) * 0.75;
   }, []);
 
@@ -127,18 +134,20 @@ const App: React.FC = () => {
     setPrevExchangeRate(exchangeRate);
     setPrevGoldPrice(goldPrice);
     setPrevValuation(currentTotalValuation);
+    setPrevMarketPrice(marketPrice);
 
     const overlayTimer = setTimeout(() => {
       setShowSyncOverlay(true);
-    }, 5000);
+    }, 20000);
 
     try {
       const [goldRes, rateRes, wallGoldRes] = await Promise.all([
-        fetchLatestGoldPrice(),
+        fetchLatestGoldPrice(goldPrefSource),
         fetchExchangeRate(),
         fetchMarketPrice()
       ]);
 
+      // Handle Gold Spot Pricing
       if (goldRes.price > 0) {
         setGoldPrice(goldRes.price);
         setGoldSource(goldRes.source);
@@ -146,23 +155,25 @@ const App: React.FC = () => {
         localStorage.setItem(STORAGE_KEYS.GOLD_SOURCE, goldRes.source);
       }
 
+      // Handle Market Price
       if (wallGoldRes > 0) {
         setMarketPrice(wallGoldRes);
         localStorage.setItem(STORAGE_KEYS.MARKET_PRICE, wallGoldRes.toString());
       }
 
+      // Handle Exchange Rates
       setAvailableRates({
         tetherland: rateRes.tetherland,
         nobitex: rateRes.nobitex
       });
 
       let selectedRate = 0;
-      let finalSource: string = 'None';
+      let finalExSource: string = 'None';
 
       const tryTetherland = () => {
         if (rateRes.tetherland.status === 'ok') {
           selectedRate = rateRes.tetherland.price;
-          finalSource = 'Tetherland';
+          finalExSource = 'Tetherland';
           return true;
         }
         return false;
@@ -171,7 +182,7 @@ const App: React.FC = () => {
       const tryNobitex = () => {
         if (rateRes.nobitex.status === 'ok') {
           selectedRate = rateRes.nobitex.price;
-          finalSource = 'Nobitex';
+          finalExSource = 'Nobitex';
           return true;
         }
         return false;
@@ -187,9 +198,9 @@ const App: React.FC = () => {
 
       if (selectedRate > 0) {
         setExchangeRate(selectedRate);
-        setExchangeSource(finalSource);
+        setExchangeSource(finalExSource);
         localStorage.setItem(STORAGE_KEYS.EXCHANGE_RATE, selectedRate.toString());
-        localStorage.setItem(STORAGE_KEYS.EXCHANGE_SOURCE, finalSource);
+        localStorage.setItem(STORAGE_KEYS.EXCHANGE_SOURCE, finalExSource);
       }
 
       const newPricePerGram = calculateResult(selectedRate || exchangeRate, goldRes.price || goldPrice);
@@ -243,22 +254,13 @@ const App: React.FC = () => {
   const handleSourcePrefChange = (source: 'Tetherland' | 'Nobitex' | 'Auto') => {
     setPrefSource(source);
     localStorage.setItem(STORAGE_KEYS.USER_PREFERENCE_SOURCE, source);
-    
-    if (source === 'Tetherland' && availableRates.tetherland.status === 'ok') {
-      setExchangeRate(availableRates.tetherland.price);
-      setExchangeSource('Tetherland');
-    } else if (source === 'Nobitex' && availableRates.nobitex.status === 'ok') {
-      setExchangeRate(availableRates.nobitex.price);
-      setExchangeSource('Nobitex');
-    } else if (source === 'Auto') {
-       if (availableRates.tetherland.status === 'ok') {
-         setExchangeRate(availableRates.tetherland.price);
-         setExchangeSource('Tetherland');
-       } else if (availableRates.nobitex.status === 'ok') {
-         setExchangeRate(availableRates.nobitex.price);
-         setExchangeSource('Nobitex');
-       }
-    }
+    refreshData();
+  };
+
+  const handleGoldSourcePrefChange = (source: GoldSource) => {
+    setGoldPrefSource(source);
+    localStorage.setItem(STORAGE_KEYS.GOLD_PREF_SOURCE, source);
+    refreshData();
   };
 
   const handleGramAmountChange = (value: number) => {
@@ -313,6 +315,7 @@ const App: React.FC = () => {
   const valuationChange = getPercentChange(currentTotalValuation, prevValuation);
   const rateChange = getPercentChange(exchangeRate, prevExchangeRate);
   const goldChange = getPercentChange(goldPrice, prevGoldPrice);
+  const marketChange = getPercentChange(marketPrice, prevMarketPrice);
 
   const isTimeCritical = timeLeft > 0 && timeLeft <= 5000;
 
@@ -356,15 +359,41 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen text-slate-100 flex flex-col p-4 sm:p-6 md:p-8 max-w-7xl mx-auto selection:bg-amber-500/30 overflow-x-hidden relative">
+    <div className="min-h-screen text-slate-100 flex flex-col p-4 sm:p-6 md:p-8 max-w-7xl mx-auto selection:bg-amber-500/30 overflow-x-hidden relative pb-20 sm:pb-8">
       <audio ref={audioRef} src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" preload="auto" />
 
-      {((isInitialLoad && goldPrice === 0) || showSyncOverlay) && (
+      {/* Floating Action Button for Mobile Sync */}
+      <div className="fixed bottom-6 right-6 z-50 flex flex-col items-center gap-2 sm:hidden">
+        {refreshInterval > 0 && (
+          <div className={`px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-900/90 border border-slate-700/50 backdrop-blur-md shadow-xl tracking-tighter ${isTimeCritical ? 'text-rose-500 animate-pulse' : 'text-amber-500/80'}`}>
+            {formatTimeLeft(timeLeft)}
+          </div>
+        )}
+        <button
+          onClick={refreshData}
+          disabled={isSyncing}
+          className={`relative group flex items-center justify-center w-14 h-14 rounded-full shadow-[0_8px_32px_rgba(0,0,0,0.5)] border border-white/10 transition-all active:scale-90 active:rotate-12 ${
+            isSyncing 
+              ? 'bg-amber-500 text-slate-950 animate-pulse ring-4 ring-amber-500/20' 
+              : 'bg-slate-900/90 text-amber-500 backdrop-blur-md hover:bg-slate-800'
+          }`}
+        >
+          <RefreshCw 
+            size={24} 
+            className={`${isSyncing ? 'animate-spin' : 'group-active:rotate-180 transition-transform duration-500'}`} 
+          />
+          {isSyncing && (
+            <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 rounded-full border-2 border-slate-900 animate-ping"></span>
+          )}
+        </button>
+      </div>
+
+      {showSyncOverlay && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/95 backdrop-blur-md">
           <div className="flex flex-col items-center gap-6 p-10 text-center animate-pulse">
             <Loader2 size={56} className="text-amber-500 animate-spin" />
             <h2 className="text-3xl font-bold gold-gradient luxury-text uppercase tracking-widest">Aura Sync</h2>
-            <p className="text-slate-500 text-sm font-medium tracking-wide">Retrieving global market metrics...</p>
+            <p className="text-slate-500 text-sm font-medium tracking-wide">Connecting to global market metrics... Please wait.</p>
           </div>
         </div>
       )}
@@ -398,12 +427,12 @@ const App: React.FC = () => {
               <Clock size={14} className={isTimeCritical ? 'text-rose-500 animate-pulse' : 'text-slate-500'} />
               <span className={`text-[10px] font-bold uppercase tracking-widest ${isTimeCritical ? 'text-rose-500' : 'text-slate-500'}`}>Auto</span>
             </div>
-            <div className="flex gap-1">
+            <div className="flex gap-1 overflow-x-auto no-scrollbar">
               {REFRESH_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
                   onClick={() => handleIntervalChange(opt.value)}
-                  className={`px-3 py-1 rounded-full text-[10px] font-black transition-all ${
+                  className={`px-3 py-1 rounded-full text-[10px] font-black transition-all whitespace-nowrap ${
                     refreshInterval === opt.value 
                       ? 'bg-amber-500 text-slate-950 shadow-lg' 
                       : 'text-slate-400 hover:text-slate-200 hover:bg-slate-700/50'
@@ -418,7 +447,7 @@ const App: React.FC = () => {
           <button 
             onClick={refreshData}
             disabled={isSyncing}
-            className="flex items-center gap-3 px-8 py-3 rounded-full bg-slate-800/80 hover:bg-slate-700 border border-slate-700 transition-all active:scale-95 disabled:opacity-50 w-full sm:w-auto justify-center"
+            className="hidden sm:flex items-center gap-3 px-8 py-3 rounded-full bg-slate-800/80 hover:bg-slate-700 border border-slate-700 transition-all active:scale-95 disabled:opacity-50 w-full sm:w-auto justify-center"
           >
             <RefreshCw size={18} className={isSyncing ? 'animate-spin' : ''} />
             <div className="flex flex-row items-center gap-1.5 sm:flex-col sm:items-start leading-none">
@@ -449,7 +478,7 @@ const App: React.FC = () => {
             
             <div className="flex-1">
               <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-500 mb-4 flex items-center gap-2">
-                <Coins size={14} className="text-amber-500" /> Valuation (فیمت بدون حباب)
+                <Coins size={14} className="text-amber-500" /> Valuation (قیمت بدون حباب)
               </h3>
               
               <div className="flex flex-col gap-4">
@@ -457,6 +486,7 @@ const App: React.FC = () => {
                   <input 
                     type="number" 
                     step="0.01"
+                    inputMode="decimal"
                     value={gramAmount || ''}
                     onChange={(e) => handleGramAmountChange(Number(e.target.value))}
                     className="w-full bg-slate-950/40 border border-slate-800 rounded-2xl py-3 px-6 text-xl font-black text-white focus:border-amber-500/40 outline-none transition-all pr-16"
@@ -486,8 +516,11 @@ const App: React.FC = () => {
                 <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-2">
                   <BarChart3 size={14} className="text-amber-500" /> Market Price (قیمت بازار)
                 </h3>
-                <div className="px-2 py-0.5 bg-amber-500/10 rounded-full border border-amber-500/30 text-amber-500 text-[8px] font-bold uppercase tracking-tighter">
-                  WallGold Live
+                <div className="flex items-center gap-2">
+                  {renderPercentBadge(marketChange)}
+                  <div className="px-2 py-0.5 bg-amber-500/10 rounded-full border border-amber-500/30 text-amber-500 text-[8px] font-bold uppercase tracking-tighter">
+                    WallGold Live
+                  </div>
                 </div>
               </div>
               
@@ -512,11 +545,25 @@ const App: React.FC = () => {
 
         <section className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <div className="bg-slate-900/60 border border-slate-800/50 rounded-[2.5rem] p-6 shadow-2xl relative overflow-hidden flex flex-col justify-center min-h-[160px]">
-            <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-4 gap-2">
               <h3 className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-2">
-                <TrendingUp size={14} className="text-amber-500" /> Gold Spot Price
+                <TrendingUp size={14} className="text-amber-500" /> Gold Spot Source
               </h3>
-              {renderSourceBadge(goldSource)}
+              <div className="flex gap-1 overflow-x-auto no-scrollbar">
+                {(['Auto', 'GoldAPI.com', 'Live', 'Swissquote'] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => handleGoldSourcePrefChange(s as any)}
+                    className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
+                      goldPrefSource === s 
+                        ? 'bg-amber-500 text-slate-950 shadow-md' 
+                        : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
+                    }`}
+                  >
+                    {s === 'Live' ? 'GoldAPI.io' : s}
+                  </button>
+                ))}
+              </div>
             </div>
             
             <div className="flex items-center justify-between">
@@ -525,8 +572,9 @@ const App: React.FC = () => {
                   ${(goldPrice || 0).toLocaleString()}
                   <span className="text-[10px] font-medium text-slate-500 ml-2 uppercase">/ t oz</span>
                 </div>
-                <div className="mt-2">
+                <div className="mt-2 flex items-center gap-2">
                   {renderPercentBadge(goldChange)}
+                  {renderSourceBadge(goldSource)}
                 </div>
               </div>
               <div className={`p-4 rounded-full ${goldChange.direction === 'up' ? 'bg-emerald-500/10 text-emerald-500' : goldChange.direction === 'down' ? 'bg-rose-500/10 text-rose-500' : 'bg-slate-700/50 text-slate-500'}`}>
@@ -536,11 +584,11 @@ const App: React.FC = () => {
           </div>
 
           <div className="bg-slate-900/60 border border-slate-800/50 rounded-[2.5rem] p-6 shadow-2xl relative overflow-hidden flex flex-col justify-center min-h-[160px]">
-            <div className="flex justify-between items-center mb-4">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-4 gap-2">
               <h2 className="text-[10px] font-black uppercase tracking-widest text-slate-500 flex items-center gap-2">
-                <Calculator size={14} className="text-amber-500" /> Market Sources
+                <Calculator size={14} className="text-amber-500" /> Exchange Source
               </h2>
-              <div className="flex gap-1">
+              <div className="flex gap-1 overflow-x-auto no-scrollbar">
                 {(['Auto', 'Tetherland', 'Nobitex'] as const).map((s) => {
                   const isUnavailable = s !== 'Auto' && availableRates[s.toLowerCase() as 'tetherland' | 'nobitex'].status === 'error' && !isSyncing && !isInitialLoad;
                   return (
@@ -548,9 +596,9 @@ const App: React.FC = () => {
                       key={s}
                       disabled={isUnavailable}
                       onClick={() => handleSourcePrefChange(s)}
-                      className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-wider transition-all ${
+                      className={`px-2 py-1 rounded-lg text-[8px] font-black uppercase tracking-wider transition-all whitespace-nowrap ${
                         prefSource === s 
-                          ? 'bg-amber-500 text-slate-950' 
+                          ? 'bg-amber-500 text-slate-950 shadow-md' 
                           : isUnavailable 
                             ? 'text-slate-700 cursor-not-allowed opacity-50' 
                             : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/50'
@@ -567,6 +615,7 @@ const App: React.FC = () => {
               <div className="relative">
                 <input 
                   type="number" 
+                  inputMode="numeric"
                   value={exchangeRate || ''}
                   onChange={(e) => handleExchangeRateChange(Number(e.target.value))}
                   className="w-full bg-slate-950/30 border border-slate-800 focus:border-amber-500/50 rounded-2xl py-3 px-6 text-xl font-bold text-white outline-none transition-all"
@@ -586,8 +635,8 @@ const App: React.FC = () => {
         </section>
       </main>
 
-      <footer className="mt-8 py-6 border-t border-slate-800/50 flex flex-col items-center gap-4">
-        <div className="flex flex-wrap justify-center gap-4 text-[9px] font-bold text-slate-600 uppercase tracking-widest">
+      <footer className="mt-4 sm:mt-8 py-2 sm:py-6 border-t border-slate-800/50 flex flex-col items-center gap-2 sm:gap-4">
+        <div className="flex flex-wrap justify-center gap-x-3 gap-y-1 text-[8px] sm:text-[9px] font-bold text-slate-600 uppercase tracking-widest">
             <span>NOBITEX</span>
             <span>TETHERLAND</span>
             <span>GOLD-API</span>
@@ -595,10 +644,15 @@ const App: React.FC = () => {
             <span>SWISSQUOTE</span>
             <span>WALLGOLD</span>
         </div>
-        <p className="text-slate-700 text-[8px] font-bold tracking-[0.5em] uppercase text-center">
+        <p className="text-slate-700 text-[7px] sm:text-[8px] font-bold tracking-[0.3em] sm:tracking-[0.5em] uppercase text-center">
           AuraGold © 2025 Market Precision
         </p>
       </footer>
+
+      <style dangerouslySetInnerHTML={{ __html: `
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+      `}} />
     </div>
   );
 };
